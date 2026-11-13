@@ -28,7 +28,7 @@ llm = ChatOpenAI(
     base_url=f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1",
     api_key=CF_TOKEN,
     max_tokens=4096,
-    max_retries=0,
+    timeout= 60,   ## Tempo massimo di attesa per la risposta
 )
 logger = logging.getLogger(__name__)   
 
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 class PlannedTask(BaseModel):
     agent: Literal["research_agent","coding_agent"] = Field(description="Agente a cui assegnare un task")
     task: str = Field(
-        description="Lista dei task da assegnare agli agenti. Vuota se non serve nessun agente."
+        description="Singolo compito che l'agente deve svolgere."
     )
 
 class AgentResult(TypedDict):
@@ -45,45 +45,47 @@ class AgentResult(TypedDict):
 
 class AgentState(TypedDict):
     tasks: list[PlannedTask] ##Task da assegnare a ciascun agente
-    task : str ##Input utente
+    user_input : str ##Input utente
     results: Annotated[list[AgentResult], operator.add]   ##Risultato di ogni agente- risorsa condivisa 
     final_response: str  ## risposta finale dell'aggregator
 
-
-class AgentPrivateState(TypedDict):
-    results: Annotated[list[AgentResult], operator.add]
+class AgentInput(TypedDict):
     current_task: str
-    messages: Annotated[list[BaseMessage],add_messages] ## Serve per il richiamo dei tool di ciascun agente in quanto per convenzione usano messages
-    tool_calls: Annotated[int, operator.add] ## Lo uso per contare quante volte chiamano i tools e porre un limite. 
 
+class AgentOutput(TypedDict):
+    results: Annotated[list[AgentResult], operator.add]
+
+class AgentPrivateState(AgentInput, AgentOutput):
+    messages: Annotated[list[BaseMessage],add_messages] ## Serve per il richiamo dei tool di ciascun agente in quanto per convenzione usano messages
+    tools_call_amount: Annotated[int, operator.add] ## Lo uso per contare quante volte chiamano i tools e porre un limite. 
 
 
 ### Factory per la definizione di agenti con tool-> La richiamo ogni volta che ho un agente che deve richiamare qualche tool
-def factoryAgent(name: str, system_prompt: str, tool_list: list, max_tool_call: int=MAX_TOOL_CALLS):
+def factoryAgent(display_name: str, system_prompt: str, tool_list: list, max_tool_call: int=MAX_TOOL_CALLS):
     llm_bind_tools = llm.bind_tools(tool_list)
 
     def agent_node(state: AgentPrivateState):
-        print(f"[agent]:{name}")
+        print(f"[{display_name}]")
         message =[SystemMessage(content=system_prompt),HumanMessage(content= state["current_task"])]+ state.get("messages",[])
 
         ## Nel caso in cui si superano i tentativi previsti chiama llm per la risposta finale.
-        if state.get("tool_calls",0)>= max_tool_call:
-            print(f"{name} limite di tool call raggiunto, risposta senza tool")
+        if state.get("tools_call_amount",0)>= max_tool_call:
+            print(f"[{display_name}] limite di tool call raggiunto, risposta senza tool")
             message.append(HumanMessage(content="Hai raggiunto il limite di ricerche, rispondi subito alla richiesta con le informazioni raccolte."))
 
             result = llm.invoke(message)
             return {"messages":[result]}
 
         response = llm_bind_tools.invoke(message)
-        return {"messages": [response], "tool_calls": 1 if response.tool_calls else 0}
+        return {"messages": [response], "tools_call_amount": 1 if response.tool_calls else 0} ## tools_call_amount è la chiave di AgentPrivateState mentre tool_calls è l'attibuto indentificativo dei tools fissato da langchain
 
     def publish(state: AgentPrivateState):
         ##Scrive in result l'ultima risposta
         last_message = state["messages"][-1].content
-        return {"results":[{"agent": name, "content":last_message or "Nessuna risposta dal modello"}] }
+        return {"results":[{"agent": display_name, "content":last_message or "Nessuna risposta dal modello"}] }
 
 
-    subGraph = StateGraph(AgentPrivateState)
+    subGraph = StateGraph(AgentPrivateState, input_schema = AgentInput, output_schema = AgentOutput)
     subGraph.add_node("agent", agent_node)
     subGraph.add_node("tools",ToolNode(tool_list))
     subGraph.add_node("publish",publish)
@@ -124,13 +126,13 @@ RESEARCH_PROMPT = (
 
 research_tools = [research_tool]
 
-research_agent = factoryAgent("researcher", RESEARCH_PROMPT,research_tools)
+research_agent = factoryAgent("Research Agent", RESEARCH_PROMPT,research_tools)
 
 ###
 
 
-def create_coding_agent(state: AgentState) -> AgentState:
-    print("Sono nel coding agent")
+def create_coding_agent(state: AgentInput):
+    print("[Coding Agent]")
     system_prompt = f"Sei un agente specializzato nel coding per rispondere alle eventuali richieste dell'utente. Scrivi in modo breve il codice."
     messages = [SystemMessage(content = system_prompt), HumanMessage(content= state["current_task"])]
     response = llm.invoke(messages)
@@ -155,11 +157,12 @@ def route(state: AgentState):
     return [Send(t.agent, {"current_task": t.task}) for t in tasks]
 
 
+
 #######################
 # Main Graph
 #######################
 class Plan(BaseModel):
-    tasks: list[PlannedTask] = Field(default_factory=list)
+    tasks: list[PlannedTask] = Field(description="List per gestire le task da assegnare a ciascun agente.")
 
 
 planner_llm = llm.with_structured_output(Plan)
@@ -167,22 +170,22 @@ planner_llm = llm.with_structured_output(Plan)
 PLANNER_PROMPT = (
     "Sei un planner. Dividi la richiesta dell'utente in compiti, uno per agente, "
     "senza sovrapposizioni.\n"
-    "- research: SOLO domande su fatti, persone, eventi, notizie.\n"
-    "- coding: SOLO scrittura o correzione di codice.\n"
+    "- research_agent: SOLO domande su fatti, persone, eventi, notizie.\n"
+    "- coding_agent: SOLO scrittura o correzione di codice.\n"
     "Usa un agente solo se la richiesta contiene un compito per lui. "
     "Lista vuota SOLO per saluti o chiacchiere.\n"
     "Esempio: 'chi era Dijkstra, scrivi l'algoritmo' -> "
-    "research: 'Chi era Edsger Dijkstra?'; "
-    "coding: 'Scrivi l'algoritmo di Dijkstra per i cammini minimi.'"
+    "research_agent: 'Chi era Edsger Dijkstra?'; "
+    "coding_agent: 'Scrivi l'algoritmo di Dijkstra per i cammini minimi.'"
 )
 
 
 def plannerAgent(state:AgentState) -> AgentState:
     """Questo agente pianifica le azioni da eseguire in base all'input dell'utente. """
 
-    print("Sono nel planner...")
+    print("[Planner]")
     # 2. L'input dell'utente va nel HumanMessage
-    human_msg = HumanMessage(content=state['task'])
+    human_msg = HumanMessage(content=state['user_input'])
     
     plan = planner_llm.invoke([SystemMessage(PLANNER_PROMPT), human_msg])
     tasks = plan.tasks if plan else []##Visto che è BaseModel posso accedere tramite il '.' . Se fosse stato TypeDict dovevo accedere con state['valore']
@@ -194,7 +197,7 @@ def plannerAgent(state:AgentState) -> AgentState:
 def aggregator(state: AgentState) -> AgentState:
     """Aggrega i risultati della ricerca e li restituisce all'utente."""
     agents = {r["agent"]: r["content"]  for r in state["results"]}
-    print("Sono nell'aggregatore...")
+    print("[Aggregator]")
     parts = []
     for name in sorted(agents):
         parts.append(f"=== {name.upper()} ===\n{agents[name]}")
@@ -214,7 +217,7 @@ mainGraph.add_conditional_edges(
     route,
     ["research_agent", "coding_agent", "aggregator"],  # target validi
 )
-
+mainGraph.add_edge("research_agent",  "aggregator")
 mainGraph.add_edge("coding_agent",  "aggregator")
 mainGraph.add_edge("aggregator", END)
 
@@ -230,7 +233,7 @@ if __name__ == "__main__":
         
         config = { 'configurable': {'thread_id': str(uuid.uuid4())} }
         
-        result = mainGraph.invoke({"task": user_input}, config=config)
+        result = mainGraph.invoke({"user_input": user_input}, config=config)
         print(f"Risposta finale: {result['final_response']}")
 
    
