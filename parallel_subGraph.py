@@ -22,6 +22,7 @@ ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID")
 CF_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
 
 MAX_TOOL_CALLS = 2
+PATH = r"Aggiungi il tuo Path" ##versione primitiva con Path hardcoded.
 
 llm = ChatOpenAI(
     model="@cf/qwen/qwen3.8-27b",
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 ### Classi per decidere le task da assegnare a ciascun agent.
 class PlannedTask(BaseModel):
-    agent: Literal["research_agent","coding_agent"] = Field(description="Agente a cui assegnare un task")
+    agent: Literal["research_agent","coding_agent","file_saver_agent"] = Field(description="Agente a cui assegnare un task")
     task: str = Field(
         description="Singolo compito che l'agente deve svolgere."
     )
@@ -115,6 +116,16 @@ def research_tool(query: str) -> str:
         return f"Errore durante la ricerca web: {str(e)}"
 
 
+@tool
+def save_file(path:str, content: str):
+    """Questo tool è utilizzabile per salvare una risposta su un file."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+            return "Contenuto Scritto con successo!"
+    except Exception as e:
+        return f"Errore durante la scrittura su file: {e}"
+    
 
 
 RESEARCH_PROMPT = (
@@ -124,12 +135,14 @@ RESEARCH_PROMPT = (
         "'Non ho trovato informazioni al riguardo'."
     )
 
+FILE_SAVER_PROMPT=f"Sei un agente specializzato nel salvare informazioni su file utilizzando il tool 'save_file'. Puoi lavorare solo nella cartella corrispondente a {PATH}"
+"Il nome del file di testo sei libero di inventarlo a patto che sia opportunamento correlato al task assegnato."
+
 research_tools = [research_tool]
+file_saver_tools = [save_file]
 
 research_agent = factoryAgent("Research Agent", RESEARCH_PROMPT,research_tools)
-
-###
-
+file_saver_agent = factoryAgent("File Saver Agent", FILE_SAVER_PROMPT, file_saver_tools)
 
 def create_coding_agent(state: AgentInput):
     print("[Coding Agent]")
@@ -137,6 +150,7 @@ def create_coding_agent(state: AgentInput):
     messages = [SystemMessage(content = system_prompt), HumanMessage(content= state["current_task"])]
     response = llm.invoke(messages)
     return {"results":[{"agent":"coding_agent","content":response.content}]}
+
 
 
 
@@ -151,11 +165,22 @@ def route(state: AgentState):
     quindi l'agente target riceve lo stato con il proprio task isolato.
     """
     tasks = state.get("tasks", [])
-    if not tasks:
-        print("Nessun task: vado dritto all'aggregator")
+    parallel_tasks = [t for t in tasks if t.agent != "file_saver_agent"]
+    if not parallel_tasks:
+        print("Nessun task parallelo: vado dritto all'aggregator")
         return "aggregator"
-    return [Send(t.agent, {"current_task": t.task}) for t in tasks]
+    return [Send(t.agent, {"current_task": t.task}) for t in parallel_tasks]
 
+
+def route_after_aggregator(state: AgentState):
+    """Se il planner ha previsto un salvataggio è necessario utilizzare questo route_aggregator."""
+    save_task = [t for t in state.get("tasks", []) if t.agent == "file_saver_agent"]
+    if not save_task:
+        return END
+
+    original_task = save_task[0].task
+    content = f"{original_task}. Contenuto da salvare {state['final_response']}"
+    return Send("file_saver_agent", {"current_task":content})
 
 
 #######################
@@ -172,11 +197,13 @@ PLANNER_PROMPT = (
     "senza sovrapposizioni.\n"
     "- research_agent: SOLO domande su fatti, persone, eventi, notizie.\n"
     "- coding_agent: SOLO scrittura o correzione di codice.\n"
+    "- file_saver_agent: SOLO se viene esplicitamente richiesto il salvataggio della risposta su file di testo"
     "Usa un agente solo se la richiesta contiene un compito per lui. "
     "Lista vuota SOLO per saluti o chiacchiere.\n"
     "Esempio: 'chi era Dijkstra, scrivi l'algoritmo' -> "
     "research_agent: 'Chi era Edsger Dijkstra?'; "
     "coding_agent: 'Scrivi l'algoritmo di Dijkstra per i cammini minimi.'"
+    "file_saver_agent: 'Salva la risposta finale su un file di testo.'"
 )
 
 
@@ -200,7 +227,7 @@ def aggregator(state: AgentState) -> AgentState:
     print("[Aggregator]")
     parts = []
     for name in sorted(agents):
-        parts.append(f"=== {name.upper()} ===\n{agents[name]}")
+        parts.append(f"=== {name.upper()} ===\n{agents[name]}") ##lookup del valore associato a ciascuna chiave name ovvero il contenuto fornito da ciascun agente.
 
     return {"final_response": "\n\n".join(parts)}
 
@@ -210,6 +237,7 @@ mainGraph = StateGraph(AgentState)
 mainGraph.add_node("planner_agent", plannerAgent)
 mainGraph.add_node("aggregator", aggregator)
 mainGraph.add_node("research_agent", research_agent)
+mainGraph.add_node("file_saver_agent", file_saver_agent)
 mainGraph.add_node("coding_agent", create_coding_agent)
 mainGraph.add_edge(START, "planner_agent")
 mainGraph.add_conditional_edges(
@@ -219,7 +247,8 @@ mainGraph.add_conditional_edges(
 )
 mainGraph.add_edge("research_agent",  "aggregator")
 mainGraph.add_edge("coding_agent",  "aggregator")
-mainGraph.add_edge("aggregator", END)
+mainGraph.add_conditional_edges("aggregator",route_after_aggregator, {"file_saver_agent", END})
+mainGraph.add_edge("file_saver_agent", END)
 
 checkpointer = InMemorySaver()
 
