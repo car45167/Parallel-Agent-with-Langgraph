@@ -1,235 +1,30 @@
-import os
-from typing import Annotated, Literal, TypedDict
-from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langgraph.checkpoint.memory import MemorySaver
+
+
 from langgraph.graph import StateGraph, START, END
-from dotenv import load_dotenv
-import operator
-from ddgs import DDGS
-from langchain_core.tools import tool
-from langgraph.types import Send
-from langgraph.prebuilt import ToolNode,tools_condition
-from langgraph.graph.message import add_messages
+
+
+from agents.research_agent import research_agent
+from agents.file_saver_agent import file_saver_agent
+from agents.planner_agent import plannerAgent
+from common_nodes import aggregator,create_coding_agent, route, route_after_aggregator
+from schemas import AgentState
 from langgraph.checkpoint.memory import InMemorySaver
 import uuid
-import logging
 
 
-load_dotenv()
-ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID")
-CF_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
-
-MAX_TOOL_CALLS = 2
 PATH = r"Aggiungi il tuo Path" ##versione primitiva con Path hardcoded.
 
-llm = ChatOpenAI(
-    model="@cf/qwen/qwen3.8-27b",
-    base_url=f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1",
-    api_key=CF_TOKEN,
-    max_tokens=4096,
-    timeout= 60,   ## Tempo massimo di attesa per la risposta
-)
-logger = logging.getLogger(__name__)   
-
-### Classi per decidere le task da assegnare a ciascun agent.
-class PlannedTask(BaseModel):
-    agent: Literal["research_agent","coding_agent","file_saver_agent"] = Field(description="Agente a cui assegnare un task")
-    task: str = Field(
-        description="Singolo compito che l'agente deve svolgere."
-    )
-
-class AgentResult(TypedDict):
-    agent: str
-    content: str
-
-class AgentState(TypedDict):
-    tasks: list[PlannedTask] ##Task da assegnare a ciascun agente
-    user_input : str ##Input utente
-    results: Annotated[list[AgentResult], operator.add]   ##Risultato di ogni agente- risorsa condivisa 
-    final_response: str  ## risposta finale dell'aggregator
-
-class AgentInput(TypedDict):
-    current_task: str
-
-class AgentOutput(TypedDict):
-    results: Annotated[list[AgentResult], operator.add]
-
-class AgentPrivateState(AgentInput, AgentOutput):
-    messages: Annotated[list[BaseMessage],add_messages] ## Serve per il richiamo dei tool di ciascun agente in quanto per convenzione usano messages
-    tools_call_amount: Annotated[int, operator.add] ## Lo uso per contare quante volte chiamano i tools e porre un limite. 
-
-
-### Factory per la definizione di agenti con tool-> La richiamo ogni volta che ho un agente che deve richiamare qualche tool
-def factoryAgent(display_name: str, system_prompt: str, tool_list: list, max_tool_call: int=MAX_TOOL_CALLS):
-    llm_bind_tools = llm.bind_tools(tool_list)
-
-    def agent_node(state: AgentPrivateState):
-        print(f"[{display_name}]")
-        message =[SystemMessage(content=system_prompt),HumanMessage(content= state["current_task"])]+ state.get("messages",[])
-
-        ## Nel caso in cui si superano i tentativi previsti chiama llm per la risposta finale.
-        if state.get("tools_call_amount",0)>= max_tool_call:
-            print(f"[{display_name}] limite di tool call raggiunto, risposta senza tool")
-            message.append(HumanMessage(content="Hai raggiunto il limite di ricerche, rispondi subito alla richiesta con le informazioni raccolte."))
-
-            result = llm.invoke(message)
-            return {"messages":[result]}
-
-        response = llm_bind_tools.invoke(message)
-        return {"messages": [response], "tools_call_amount": 1 if response.tool_calls else 0} ## tools_call_amount è la chiave di AgentPrivateState mentre tool_calls è l'attibuto indentificativo dei tools fissato da langchain
-
-    def publish(state: AgentPrivateState):
-        ##Scrive in result l'ultima risposta
-        last_message = state["messages"][-1].content
-        return {"results":[{"agent": display_name, "content":last_message or "Nessuna risposta dal modello"}] }
-
-
-    subGraph = StateGraph(AgentPrivateState, input_schema = AgentInput, output_schema = AgentOutput)
-    subGraph.add_node("agent", agent_node)
-    subGraph.add_node("tools",ToolNode(tool_list))
-    subGraph.add_node("publish",publish)
-    subGraph.add_edge(START,"agent")
-    subGraph.add_conditional_edges("agent",tools_condition,{"tools":"tools", END: "publish"})
-    subGraph.add_edge("tools","agent")
-    subGraph.add_edge("publish", END)
-    return subGraph.compile()
 
 
 
-@tool
-def research_tool(query: str) -> str:
-    """Questo tool è utilizzato per eseguire ricerche sul web """
-    try:
-        ddgs = DDGS()
-        results = ddgs.text(query, max_results=3)
-        
-        # Se non ci sono risultati, restituiamo una stringa invece di lasciare results vuoto
-        if not results:
-            return "Nessun risultato trovato sul web per questa query."
-            
-        # Estraiamo in modo sicuro il 'body' (evitando KeyError se la chiave manca)
-        return "\n\n".join(r.get("body", "") for r in results if "body" in r)
-    except Exception as e:
-        # Catturiamo qualsiasi errore (es. rate limit, timeout, ecc.)
-        return f"Errore durante la ricerca web: {str(e)}"
 
 
-@tool
-def save_file(path:str, content: str):
-    """Questo tool è utilizzabile per salvare una risposta su un file."""
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-            return "Contenuto Scritto con successo!"
-    except Exception as e:
-        return f"Errore durante la scrittura su file: {e}"
     
 
 
-RESEARCH_PROMPT = (
-        "Sei un agente di ricerca web. Per rispondere alle domande dell'utente "
-        "usa il tool 'research_tool'. Non attingere alla tua conoscenza interna: "
-        "usa solo le informazioni ottenute dal tool. Se non trovi nulla rispondi "
-        "'Non ho trovato informazioni al riguardo'."
-    )
-
-FILE_SAVER_PROMPT=f"Sei un agente specializzato nel salvare informazioni su file utilizzando il tool 'save_file'. Puoi lavorare solo nella cartella corrispondente a {PATH}"
-"Il nome del file di testo sei libero di inventarlo a patto che sia opportunamento correlato al task assegnato."
-
-research_tools = [research_tool]
-file_saver_tools = [save_file]
-
-research_agent = factoryAgent("Research Agent", RESEARCH_PROMPT,research_tools)
-file_saver_agent = factoryAgent("File Saver Agent", FILE_SAVER_PROMPT, file_saver_tools)
-
-def create_coding_agent(state: AgentInput):
-    print("[Coding Agent]")
-    system_prompt = f"Sei un agente specializzato nel coding per rispondere alle eventuali richieste dell'utente. Scrivi in modo breve il codice."
-    messages = [SystemMessage(content = system_prompt), HumanMessage(content= state["current_task"])]
-    response = llm.invoke(messages)
-    return {"results":[{"agent":"coding_agent","content":response.content}]}
 
 
 
-
-def route(state: AgentState):
-    """Fan-out sui task pianificati.
-
-    - Nessun task  → stringa "aggregator" (il grafo prosegue verso il join).
-    - N task       → lista di N Send, uno per agente: LangGraph esegue
-                     le branch in parallelo e poi le fonde nel parent.
-
-    Ogni Send inietta SOLO {"task": <testo del task>} nel branch,
-    quindi l'agente target riceve lo stato con il proprio task isolato.
-    """
-    tasks = state.get("tasks", [])
-    parallel_tasks = [t for t in tasks if t.agent != "file_saver_agent"]
-    if not parallel_tasks:
-        print("Nessun task parallelo: vado dritto all'aggregator")
-        return "aggregator"
-    return [Send(t.agent, {"current_task": t.task}) for t in parallel_tasks]
-
-
-def route_after_aggregator(state: AgentState):
-    """Se il planner ha previsto un salvataggio è necessario utilizzare questo route_aggregator."""
-    save_task = [t for t in state.get("tasks", []) if t.agent == "file_saver_agent"]
-    if not save_task:
-        return END
-
-    original_task = save_task[0].task
-    content = f"{original_task}. Contenuto da salvare {state['final_response']}"
-    return Send("file_saver_agent", {"current_task":content})
-
-
-#######################
-# Main Graph
-#######################
-class Plan(BaseModel):
-    tasks: list[PlannedTask] = Field(description="List per gestire le task da assegnare a ciascun agente.")
-
-
-planner_llm = llm.with_structured_output(Plan)
-
-PLANNER_PROMPT = (
-    "Sei un planner. Dividi la richiesta dell'utente in compiti, uno per agente, "
-    "senza sovrapposizioni.\n"
-    "- research_agent: SOLO domande su fatti, persone, eventi, notizie.\n"
-    "- coding_agent: SOLO scrittura o correzione di codice.\n"
-    "- file_saver_agent: SOLO se viene esplicitamente richiesto il salvataggio della risposta su file di testo"
-    "Usa un agente solo se la richiesta contiene un compito per lui. "
-    "Lista vuota SOLO per saluti o chiacchiere.\n"
-    "Esempio: 'chi era Dijkstra, scrivi l'algoritmo' -> "
-    "research_agent: 'Chi era Edsger Dijkstra?'; "
-    "coding_agent: 'Scrivi l'algoritmo di Dijkstra per i cammini minimi.'"
-    "file_saver_agent: 'Salva la risposta finale su un file di testo.'"
-)
-
-
-def plannerAgent(state:AgentState) -> AgentState:
-    """Questo agente pianifica le azioni da eseguire in base all'input dell'utente. """
-
-    print("[Planner]")
-    # 2. L'input dell'utente va nel HumanMessage
-    human_msg = HumanMessage(content=state['user_input'])
-    
-    plan = planner_llm.invoke([SystemMessage(PLANNER_PROMPT), human_msg])
-    tasks = plan.tasks if plan else []##Visto che è BaseModel posso accedere tramite il '.' . Se fosse stato TypeDict dovevo accedere con state['valore']
-    print(f"Task pianificati: {[(t.agent, t.task) for t in tasks]}")
-    return{"tasks": tasks}
-
-
-
-def aggregator(state: AgentState) -> AgentState:
-    """Aggrega i risultati della ricerca e li restituisce all'utente."""
-    agents = {r["agent"]: r["content"]  for r in state["results"]}
-    print("[Aggregator]")
-    parts = []
-    for name in sorted(agents):
-        parts.append(f"=== {name.upper()} ===\n{agents[name]}") ##lookup del valore associato a ciascuna chiave name ovvero il contenuto fornito da ciascun agente.
-
-    return {"final_response": "\n\n".join(parts)}
 
 
 mainGraph = StateGraph(AgentState)
