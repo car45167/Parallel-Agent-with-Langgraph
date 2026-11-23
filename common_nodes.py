@@ -10,11 +10,9 @@ from langchain.messages import HumanMessage,SystemMessage
 
 def route(state: AgentState):
     """Fan-out sui task pianificati.
-
     - Nessun task  → stringa "aggregator" (il grafo prosegue verso il join).
     - N task       → lista di N Send, uno per agente: LangGraph esegue
                      le branch in parallelo e poi le fonde nel parent.
-
     Ogni Send inietta SOLO {"task": <testo del task>} nel branch,
     quindi l'agente target riceve lo stato con il proprio task isolato.
     """

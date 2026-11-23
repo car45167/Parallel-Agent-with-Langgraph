@@ -6,6 +6,8 @@ from langchain_core.messages import BaseMessage
 
 
 
+## Typed Dict per gli stati del grafo-> Validazione a runtime e reducer operano su typeddict-> Fondamentale i reducer per i messaggi che salvo nelle liste. BaseModel utilizzato per structured output dell llm e basta in questo caso.
+
 
 ### Classi per decidere le task da assegnare a ciascun agent.
 class PlannedTask(BaseModel):
