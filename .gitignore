@@ -3,3 +3,9 @@ parallelAgent.py
 risposta_finale.txt
 __pycache__
 roadmap.txt
+pyproject.toml
+.vscode
+uv.lock
+.python-version
+retriever.py
+src/*

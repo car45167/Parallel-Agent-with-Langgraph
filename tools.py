@@ -20,13 +20,3 @@ def research_tool(query: str) -> str:
         return f"Errore durante la ricerca web: {str(e)}"
 
 
-@tool
-def save_file(path:str, content: str):
-    """Questo tool è utilizzabile per salvare una risposta su un file."""
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-            return "Contenuto Scritto con successo!"
-    except Exception as e:
-        return f"Errore durante la scrittura su file: {e}"
-    

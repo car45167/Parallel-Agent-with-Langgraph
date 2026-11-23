@@ -18,23 +18,16 @@ def route(state: AgentState):
     Ogni Send inietta SOLO {"task": <testo del task>} nel branch,
     quindi l'agente target riceve lo stato con il proprio task isolato.
     """
-    tasks = state.get("tasks", [])
-    parallel_tasks = [t for t in tasks if t.agent != "file_saver_agent"]
-    if not parallel_tasks:
-        print("Nessun task parallelo: vado dritto all'aggregator")
+    tasks = [t for t in state.get("tasks",[])if t.task.strip()]
+    if not tasks:
+        print("Nessun task: vado dritto all'aggregator")
         return "aggregator"
-    return [Send(t.agent, {"current_task": t.task}) for t in parallel_tasks]
+    return [Send(t.agent, {"current_task": t.task}) for t in tasks]
 
 
 def route_after_aggregator(state: AgentState):
     """Se il planner ha previsto un salvataggio è necessario utilizzare questo route_aggregator."""
-    save_task = [t for t in state.get("tasks", []) if t.agent == "file_saver_agent"]
-    if not save_task:
-        return END
-
-    original_task = save_task[0].task
-    content = f"{original_task}. Contenuto da salvare {state['final_response']}"
-    return Send("file_saver_agent", {"current_task":content})
+    return "file_saver_agent" if state.get("filename") else END
 
 
 
@@ -48,10 +41,12 @@ def create_coding_agent(state: AgentInput):
 
 def aggregator(state: AgentState) -> AgentState:
     """Aggrega i risultati della ricerca e li restituisce all'utente."""
-    agents = {r["agent"]: r["content"]  for r in state["results"]}
+    agents = {r["agent"]: r["content"]  for r in state.get("results",[])}
     print("[Aggregator]")
     parts = []
     for name in sorted(agents):
         parts.append(f"=== {name.upper()} ===\n{agents[name]}") ##lookup del valore associato a ciascuna chiave name ovvero il contenuto fornito da ciascun agente.
 
     return {"final_response": "\n\n".join(parts)}
+
+
