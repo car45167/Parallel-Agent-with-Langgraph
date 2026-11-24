@@ -7,5 +7,4 @@ pyproject.toml
 .vscode
 uv.lock
 .python-version
-retriever.py
 src/*
