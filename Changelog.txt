@@ -1,11 +1,11 @@
 
-- Rimosso l'agente incaricato del salvataggio sul file-> Soluzione esosa con chiamata a llm sostituita con nodo semplice di salvataggio
-- Implementato un meccanismo di salvataggio nella working directory -> Rimosso il salvataggio hardcoded
-- Cambiata la logica nel codice (planner, routing) per gestire il passaggio a questa nuova funzionalità.
-- Altre modifiche minori visualizzabili nella history della repository
+-Implementazione iniziale di un Rag Agent con solo semantic search
+-Creazione del db da utilizzare per il rag.
+-Cartella contenente PDF recuperabili online
+-Refactor dei nodi minori
 
 English
-- Removed the Save file agent -> Less llm calls using a simple node.
-- Implemented a safe saving mechanism-> Removed the hardcoded Save
-- Adapted the code logic to this new functionality.
-- Other changes can be consulted from the repository history
+-Initial Implementation of Rag Agent with semantic search only
+-DB created
+-Folder with pdfs which are available online
+-Refactor of simple nodes.

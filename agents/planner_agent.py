@@ -8,6 +8,7 @@ PLANNER_PROMPT = (
     "senza sovrapposizioni.\n"
     "- research_agent: SOLO domande su fatti, persone, eventi, notizie.\n"
     "- coding_agent: SOLO scrittura o correzione di codice.\n"
+    "- rag_agent: SOLO per recuperare informazioni da documenti.\n"
     "Regole sul campo 'filename':\n"
     "- Compilalo SOLO se l'utente chiede esplicitamente di salvare la risposta su un file di testo.\n"
     "- Se l'utente indica un nome per il file usa quello, altrimenti scegline uno breve e pertinente al contenuto.\n"
@@ -24,6 +25,8 @@ PLANNER_PROMPT = (
     "Esempio 3: 'chi è Vegeta? salva su file di testo' ->\n"
     "  tasks: research_agent: 'Chi è Vegeta?'\n"
     "  filename: 'vegeta_info'\n"
+    "Esempio 4: Recupera le informazioni sull' AI powered cancer dection dai documenti->\n"
+    " tasks: rag_agent: 'Recupera le informazioni su AI powered Cancer detection'\n"
 )
 
 

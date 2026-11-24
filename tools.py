@@ -1,7 +1,7 @@
 
 from langchain_core.tools import tool
 from ddgs import DDGS
-
+from retriever import retrieve
 @tool
 def research_tool(query: str) -> str:
     """Questo tool è utilizzato per eseguire ricerche sul web """
@@ -20,3 +20,14 @@ def research_tool(query: str) -> str:
         return f"Errore durante la ricerca web: {str(e)}"
 
 
+@tool
+def rag_tool(query:str)->str:
+    """Cerca nei documenti i passaggi per rispondere alla query. Usa il tool quando la domanda riguarda il contenuto dei documenti indicizzati"""
+    try:
+        docs = retrieve(query)
+    except Exception as e:
+        return f"Errore nel recupero dei documenti {e}"
+    if not docs:
+        return "Nessun informazione al riguardo trovata nei documenti"
+    return "\n\n".join(
+        f"[{d.metadata.get('source','?')}, pagina {int(d.metadata.get('pages',0))}]\n{d.page_content}" for d in docs)

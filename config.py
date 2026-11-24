@@ -3,7 +3,7 @@ import os
 from langchain_openai import ChatOpenAI
 from pathlib import Path
 
-MAX_TOOL_CALLS = 1
+MAX_TOOL_CALLS = 2
 
 load_dotenv()
 ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID")
@@ -20,5 +20,5 @@ llm = ChatOpenAI(
 )
 
 
-
+COLLECTION_NAME = "RAG_COLLECTION"
 CHROMA_DB = WORKSPACE / "chroma_db" ## Workspace/chroma_db/...

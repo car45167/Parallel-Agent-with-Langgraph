@@ -1,11 +1,7 @@
 
-from schemas import AgentState,AgentInput
+from schemas import AgentState
 from langgraph.types import Send
 from langgraph.graph import END
-from config import llm
-from langchain.messages import HumanMessage,SystemMessage
-
-
 
 
 def route(state: AgentState):
@@ -28,13 +24,6 @@ def route_after_aggregator(state: AgentState):
     return "file_saver_agent" if state.get("filename") else END
 
 
-
-def create_coding_agent(state: AgentInput):
-    print("[Coding Agent]")
-    system_prompt = f"Sei un agente specializzato nel coding per rispondere alle eventuali richieste dell'utente. Scrivi in modo breve il codice."
-    messages = [SystemMessage(content = system_prompt), HumanMessage(content= state["current_task"])]
-    response = llm.invoke(messages)
-    return {"results":[{"agent":"coding_agent","content":response.content}]}
 
 
 def aggregator(state: AgentState) -> AgentState:

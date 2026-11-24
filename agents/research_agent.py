@@ -1,10 +1,6 @@
 from tools import research_tool
 from agents.factory_agent import factoryAgent
 
-
-
-
-
 RESEARCH_PROMPT = (
         "Sei un agente di ricerca web. Per rispondere alle domande dell'utente "
         "usa il tool 'research_tool'. Non attingere alla tua conoscenza interna: "

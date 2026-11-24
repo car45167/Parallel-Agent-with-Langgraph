@@ -2,24 +2,13 @@ from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import os
-from langchain_huggingface import HuggingFaceEmbeddings
+from retriever import get_embeddings
 from pathlib import Path
-import torch
-from config import CHROMA_DB
+from config import CHROMA_DB, COLLECTION_NAME
 
 ## Altrimenti non mi legge AMD
 os.environ["HIP_VISIBLE_DEVICES"] = "1"
-
 ## Cartella di salvataggio del database è hardcoded nel workspace così come la funzione per il check della collection name sono scelte progettuali per limitare la possibilità di prompt injection quando gli llm leggeranno i nomi .
-
-def get_device(): 
-    if torch.cuda.is_available():
-        print("[CUDA]")
-        return torch.device("cuda"), 64
-    else:
-        print("[CPU]")
-        return torch.device("cpu"), 8
-
 
 ### PyMUPDF mantiene di per se la source dei dati ma in formato PATH assoluto. In questo caso prendo solo il nome del pdf.
 def carica_documenti(directory):
@@ -32,13 +21,6 @@ def carica_documenti(directory):
     return document_list
 
 
-def get_embeddings():
-    device , size= get_device()
-    return HuggingFaceEmbeddings(
-        model_name= "BAAI/bge-m3",
-        model_kwargs={"device":device},
-        encode_kwargs={"batch_size":size}
-    )
 
 
 def check_cartella(directory):
@@ -64,13 +46,12 @@ def main():
     ##Creazione degli embeddings
     embeddings = get_embeddings()
 
-    collection_name = input("Inserire un nome per la collection: ") ## Vincolo al momento non accetta spazi o altri caratteri speciali come ' " o !
 
     ##Creazione del db
     try: 
         Chroma.from_documents(documents=chunks,embedding=embeddings,
                               persist_directory=CHROMA_DB,
-                              collection_name=str(collection_name))
+                              collection_name=COLLECTION_NAME)
         print(f"[SUCCESS]Creazione del Database eseguita con successo\n")
     except Exception as e:
         print(f"[FAILED] Creazione del database fallita: {e}")

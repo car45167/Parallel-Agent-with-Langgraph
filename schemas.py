@@ -6,12 +6,12 @@ from langchain_core.messages import BaseMessage
 
 
 
-## Typed Dict per gli stati del grafo-> Validazione a runtime e reducer operano su typeddict-> Fondamentale i reducer per i messaggi che salvo nelle liste. BaseModel utilizzato per structured output dell llm e basta in questo caso.
+## Typed Dict per gli stati del grafo-> Non fa validazione a runtime. Meno sicuro di Base Model ma è standard per gli stati interni e input del grafo anche perché i reducer operano solo su essi. BaseModel utilizzato per structured output dell llm e offre validazione e controlli rigidi a runtime( Esempio Literal vincolo che deve essere rispettato).
 
 
 ### Classi per decidere le task da assegnare a ciascun agent.
 class PlannedTask(BaseModel):
-    agent: Literal["research_agent","coding_agent"] = Field(description="Agente a cui assegnare un task")
+    agent: Literal["research_agent","coding_agent","rag_agent"] = Field(description="Agente a cui assegnare un task")
     task: str = Field(
         description="Singolo compito che l'agente deve svolgere."
     )
